@@ -12,18 +12,26 @@ type ScoreResult = {
   complexity: "Low" | "Medium" | "High";
   verdict: string; // should start with BUILD / DON'T BUILD / BUILD ONLY IF
   score_out_of_10: number;
+  iteration_delta?: number | null; // returned by API if we send previous_score
 };
 
 function verdictStyle(verdict: string) {
   const v = verdict.toUpperCase();
-  if (v.startsWith("DON'T BUILD") || v.startsWith("DONT BUILD")) return { color: "crimson" };
-  if (v.startsWith("BUILD ONLY IF")) return { color: "#b26a00" };
-  if (v.startsWith("BUILD")) return { color: "green" };
-  return { color: "black" };
+  if (v.startsWith("DON'T BUILD") || v.startsWith("DONT BUILD")) return { color: "crimson" as const };
+  if (v.startsWith("BUILD ONLY IF")) return { color: "#b26a00" as const };
+  if (v.startsWith("BUILD")) return { color: "green" as const };
+  return { color: "black" as const };
 }
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
+}
+
+function deltaBadge(delta: number | null | undefined) {
+  if (delta === null || delta === undefined) return null;
+  if (delta > 0) return { text: `↑ +${delta}`, style: { color: "green" as const } };
+  if (delta < 0) return { text: `↓ ${delta}`, style: { color: "crimson" as const } };
+  return { text: "→ 0", style: { opacity: 0.75 as const } };
 }
 
 export default function ScorePage() {
@@ -34,6 +42,9 @@ export default function ScorePage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+
+  // keep the previous score we sent (so we can display delta even if API omits it)
+  const [previousScore, setPreviousScore] = useState<number | null>(null);
 
   // Must be logged in
   useEffect(() => {
@@ -49,23 +60,58 @@ export default function ScorePage() {
     setError(null);
     setResult(null);
     setSavedMsg(null);
+    setPreviousScore(null);
 
     try {
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData.user;
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      // Try to fetch previous score for this user to compute iteration delta.
+      // This is best-effort. If your table or columns differ, we fail silently and continue.
+      let prev: number | null = null;
+
+      try {
+        // Prefer created_at if it exists (default on many Supabase tables).
+        const q = await supabase
+          .from("idea_scores")
+          .select("score_out_of_10, created_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (!q.error && q.data && q.data.length > 0) {
+          const s = q.data[0]?.score_out_of_10;
+          if (typeof s === "number" && Number.isFinite(s)) prev = Math.round(s);
+        }
+      } catch {
+        // ignore
+      }
+
+      // Store for UI
+      setPreviousScore(prev);
+
       const res = await fetch("/api/score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea }),
+        body: JSON.stringify({
+          idea,
+          previous_score: prev, // API will return iteration_delta if supported
+        }),
       });
 
       const json = await res.json();
 
       if (!res.ok) {
         setError(json?.error || "Scoring failed");
-        setLoading(false);
         return;
       }
 
-      setResult(json.result);
+      setResult(json.result as ScoreResult);
     } catch (e: any) {
       setError(e?.message || "Scoring failed");
     } finally {
@@ -89,6 +135,7 @@ export default function ScorePage() {
         return;
       }
 
+      // Keep insert minimal to avoid breaking if your table schema is slightly different.
       const { error: insertError } = await supabase.from("idea_scores").insert({
         user_id: user.id,
         idea,
@@ -100,8 +147,7 @@ export default function ScorePage() {
       setSaving(false);
 
       if (insertError) {
-        // Don’t block UX; just show a small hint
-        setSavedMsg("Could not save to history (RLS or table missing).");
+        setSavedMsg("Could not save to history (RLS, table, or columns).");
         return;
       }
 
@@ -117,20 +163,43 @@ export default function ScorePage() {
     return clamp(Math.round((result.score_out_of_10 / 10) * 100), 0, 100);
   }, [result]);
 
+  const delta = useMemo(() => {
+    if (!result) return null;
+
+    // Prefer API-provided delta if available; otherwise compute from previousScore if present.
+    if (typeof result.iteration_delta === "number" && Number.isFinite(result.iteration_delta)) {
+      return result.iteration_delta;
+    }
+    if (previousScore !== null) {
+      return result.score_out_of_10 - previousScore;
+    }
+    return null;
+  }, [result, previousScore]);
+
+  const badge = useMemo(() => deltaBadge(delta), [delta]);
+
   return (
     <main style={{ padding: 40, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, marginBottom: 4 }}>{APP_NAME}</h1>
       <h2 style={{ fontSize: 32, marginBottom: 16 }}>Score an idea</h2>
 
       <label style={{ display: "block", marginBottom: 8, opacity: 0.85 }}>
-        Describe the idea (what it is, who it’s for, and how you’ll get users):
+        Describe the idea (who it’s for, the problem, what you deliver, how you’ll get users, and why you win):
       </label>
 
       <textarea
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
-        rows={6}
-        placeholder="Example: A mobile app for..."
+        rows={10}
+        placeholder={
+          "Use this template for better scores:\n" +
+          "- Who (niche):\n" +
+          "- Problem (pain + frequency):\n" +
+          "- Offer (what you deliver):\n" +
+          "- Acquisition (one channel):\n" +
+          "- Differentiator (why you):\n" +
+          "- Price (rough):\n"
+        }
         style={{
           width: "100%",
           padding: 12,
@@ -140,7 +209,7 @@ export default function ScorePage() {
         }}
       />
 
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <button
           onClick={scoreIdea}
           disabled={!idea.trim() || loading}
@@ -177,11 +246,21 @@ export default function ScorePage() {
         <div style={{ marginTop: 24, border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <p style={{ margin: 0 }}>
-              <b>Score:</b> {result.score_out_of_10}/10 &nbsp; <b>Complexity:</b> {result.complexity}
+              <b>Score:</b> {result.score_out_of_10}/10{" "}
+              {badge && (
+                <span
+                  style={{
+                    marginLeft: 10,
+                    fontWeight: 700,
+                    ...badge.style,
+                  }}
+                >
+                  {badge.text}
+                </span>
+              )}
+              &nbsp; <b>Complexity:</b> {result.complexity}
             </p>
-            <p style={{ margin: 0, opacity: 0.75 }}>
-              {saving ? "Saving..." : savedMsg ?? ""}
-            </p>
+            <p style={{ margin: 0, opacity: 0.75 }}>{saving ? "Saving..." : savedMsg ?? ""}</p>
           </div>
 
           {/* Score bar */}
@@ -216,9 +295,7 @@ export default function ScorePage() {
 
           <p style={{ marginBottom: 0 }}>
             <b>Verdict:</b>{" "}
-            <span style={{ fontWeight: 700, ...verdictStyle(result.verdict) }}>
-              {result.verdict}
-            </span>
+            <span style={{ fontWeight: 700, ...verdictStyle(result.verdict) }}>{result.verdict}</span>
           </p>
         </div>
       )}
