@@ -10,9 +10,9 @@ type ScoreResult = {
   risks: string[];
   costs_effort: string[];
   complexity: "Low" | "Medium" | "High";
-  verdict: string; // should start with BUILD / DON'T BUILD / BUILD ONLY IF
+  verdict: string;
   score_out_of_10: number;
-  iteration_delta?: number | null; // returned by API if we send previous_score
+  iteration_delta?: number | null;
 };
 
 function verdictStyle(verdict: string) {
@@ -34,6 +34,15 @@ function deltaBadge(delta: number | null | undefined) {
   return { text: "→ 0", style: { opacity: 0.75 as const } };
 }
 
+const IDEA_TEMPLATE =
+  "Use this template for better scores:\n" +
+  "- Who (niche):\n" +
+  "- Problem (pain + frequency):\n" +
+  "- Offer (what you deliver):\n" +
+  "- Acquisition (one channel):\n" +
+  "- Differentiator (why you):\n" +
+  "- Price (rough):\n";
+
 export default function ScorePage() {
   const router = useRouter();
   const [idea, setIdea] = useState("");
@@ -43,7 +52,6 @@ export default function ScorePage() {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
 
-  // keep the previous score we sent (so we can display delta even if API omits it)
   const [previousScore, setPreviousScore] = useState<number | null>(null);
 
   // Must be logged in
@@ -54,6 +62,28 @@ export default function ScorePage() {
     };
     run();
   }, [router]);
+
+  const clearAll = () => {
+    setIdea("");
+    setResult(null);
+    setError(null);
+    setSavedMsg(null);
+    setPreviousScore(null);
+  };
+
+  const fillExample = () => {
+    setIdea(
+      "Who (niche): UK care homes (small private homes)\n" +
+        "Problem: carers spend 60–90 minutes per shift writing daily notes\n" +
+        "Offer: record voice → structured compliant notes\n" +
+        "Acquisition: direct outreach to care home managers\n" +
+        "Differentiator: templates aligned to CQC inspections\n" +
+        "Price: £79/month per home\n"
+    );
+    setResult(null);
+    setError(null);
+    setSavedMsg(null);
+  };
 
   const scoreIdea = async () => {
     setLoading(true);
@@ -71,12 +101,9 @@ export default function ScorePage() {
         return;
       }
 
-      // Try to fetch previous score for this user to compute iteration delta.
-      // This is best-effort. If your table or columns differ, we fail silently and continue.
+      // Best-effort previous score lookup (for delta)
       let prev: number | null = null;
-
       try {
-        // Prefer created_at if it exists (default on many Supabase tables).
         const q = await supabase
           .from("idea_scores")
           .select("score_out_of_10, created_at")
@@ -92,7 +119,6 @@ export default function ScorePage() {
         // ignore
       }
 
-      // Store for UI
       setPreviousScore(prev);
 
       const res = await fetch("/api/score", {
@@ -100,7 +126,7 @@ export default function ScorePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           idea,
-          previous_score: prev, // API will return iteration_delta if supported
+          previous_score: prev,
         }),
       });
 
@@ -108,10 +134,11 @@ export default function ScorePage() {
 
       if (!res.ok) {
         setError(json?.error || "Scoring failed");
+        setLoading(false);
         return;
       }
 
-      setResult(json.result as ScoreResult);
+      setResult(json.result);
     } catch (e: any) {
       setError(e?.message || "Scoring failed");
     } finally {
@@ -135,7 +162,6 @@ export default function ScorePage() {
         return;
       }
 
-      // Keep insert minimal to avoid breaking if your table schema is slightly different.
       const { error: insertError } = await supabase.from("idea_scores").insert({
         user_id: user.id,
         idea,
@@ -165,14 +191,10 @@ export default function ScorePage() {
 
   const delta = useMemo(() => {
     if (!result) return null;
-
-    // Prefer API-provided delta if available; otherwise compute from previousScore if present.
     if (typeof result.iteration_delta === "number" && Number.isFinite(result.iteration_delta)) {
       return result.iteration_delta;
     }
-    if (previousScore !== null) {
-      return result.score_out_of_10 - previousScore;
-    }
+    if (previousScore !== null) return result.score_out_of_10 - previousScore;
     return null;
   }, [result, previousScore]);
 
@@ -191,15 +213,7 @@ export default function ScorePage() {
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
         rows={10}
-        placeholder={
-          "Use this template for better scores:\n" +
-          "- Who (niche):\n" +
-          "- Problem (pain + frequency):\n" +
-          "- Offer (what you deliver):\n" +
-          "- Acquisition (one channel):\n" +
-          "- Differentiator (why you):\n" +
-          "- Price (rough):\n"
-        }
+        placeholder={IDEA_TEMPLATE}
         style={{
           width: "100%",
           padding: 12,
@@ -226,6 +240,29 @@ export default function ScorePage() {
         </button>
 
         <button
+          onClick={clearAll}
+          disabled={loading && !!idea.trim()}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #ddd",
+            background: "white",
+            cursor: loading && !!idea.trim() ? "not-allowed" : "pointer",
+          }}
+          title="Clear the text and reset the result"
+        >
+          Clear
+        </button>
+
+        <button
+          onClick={fillExample}
+          style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid #ddd" }}
+          title="Fill an example idea"
+        >
+          Example
+        </button>
+
+        <button
           onClick={() => router.push("/history")}
           style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid #ddd" }}
         >
@@ -248,22 +285,13 @@ export default function ScorePage() {
             <p style={{ margin: 0 }}>
               <b>Score:</b> {result.score_out_of_10}/10{" "}
               {badge && (
-                <span
-                  style={{
-                    marginLeft: 10,
-                    fontWeight: 700,
-                    ...badge.style,
-                  }}
-                >
-                  {badge.text}
-                </span>
+                <span style={{ marginLeft: 10, fontWeight: 700, ...badge.style }}>{badge.text}</span>
               )}
               &nbsp; <b>Complexity:</b> {result.complexity}
             </p>
             <p style={{ margin: 0, opacity: 0.75 }}>{saving ? "Saving..." : savedMsg ?? ""}</p>
           </div>
 
-          {/* Score bar */}
           <div style={{ marginTop: 12, marginBottom: 12 }}>
             <div style={{ height: 10, borderRadius: 999, background: "#eee", overflow: "hidden" }}>
               <div style={{ width: `${scorePercent}%`, height: 10, background: "#111" }} />
