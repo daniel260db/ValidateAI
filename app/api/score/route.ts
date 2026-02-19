@@ -51,6 +51,12 @@ THINKING RULES
 - Assume limited budget (< £1k)
 - Prefer simple tools (APIs, no custom ML)
 - Penalise ideas that require marketplaces, hardware, or large audiences
+Positive weighting rules:
+- Strongly reward ideas that are technically simple to build.
+- Strongly reward ideas that require no integrations, approvals, or complex infrastructure.
+- If an MVP can realistically be built by one developer in under 2 weeks using existing APIs, increase the score by 1–2 points automatically.
+- Simplicity and speed of execution are major advantages and must push scores higher.
+- Easy-to-build + clear pain should typically score 8 or above.
 
 FORCE CONCRETE OUTPUT
 - Use numbers where possible (days, £ cost, difficulty)

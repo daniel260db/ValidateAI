@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { APP_NAME } from "../lib/appConfig";
+import AnalyticsTracker from "./components/AnalyticsTracker";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: APP_NAME,
-  description: "Validate ideas with AI",
+  title: "ValidateAI",
+  description: "Validate your idea in 60 seconds using structured AI analysis.",
 };
 
 export default function RootLayout({
@@ -25,7 +25,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <AnalyticsTracker />
         {children}
       </body>
     </html>
